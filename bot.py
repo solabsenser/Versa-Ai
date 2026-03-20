@@ -1,4 +1,3 @@
-```python
 import os
 import asyncio
 from dotenv import load_dotenv
@@ -142,4 +141,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-```
+    
