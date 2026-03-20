@@ -58,9 +58,13 @@ Make it technical and actionable.
 """
 
 ROUTER_PROMPT = """
-Classify task.
+Classify user intent.
+
 Return ONLY:
-code OR chat
+code → programming, scripts, bugs, APIs
+chat → general questions, explanations, conversation
+
+Be strict.
 """
 
 CRITIC_PROMPT = """
@@ -235,10 +239,13 @@ def chat(user_id, user_input):
     history = get_history(user_id)
 
     task = detect_task_sync(user_input)
+
+    # 🔥 enhancer только для code
     if task == "code":
-    enhanced = enhance_prompt(user_input)
-        else:
+        enhanced = enhance_prompt_sync(user_input)
+    else:
         enhanced = user_input
+
     model = select_model(task)
 
     system_prompt = CODE_SYSTEM if task == "code" else CHAT_SYSTEM
@@ -268,16 +275,17 @@ def chat(user_id, user_input):
         summarize(user_id)
 
     return final
-
 #================ MAIN (ASYNC) =======================
 async def chat_async(user_id, user_input):
     history = await asyncio.to_thread(get_history, user_id)
 
-    # ПАРАЛЛЕЛЬНО
-    task, enhanced = await asyncio.gather(
-        detect_task(user_input),
-        enhance_prompt(user_input)
-    )
+    task = await detect_task(user_input)
+
+    # 🔥 enhancer только для code
+    if task == "code":
+        enhanced = await enhance_prompt(user_input)
+    else:
+        enhanced = user_input
 
     model = select_model(task)
     system_prompt = CODE_SYSTEM if task == "code" else CHAT_SYSTEM
