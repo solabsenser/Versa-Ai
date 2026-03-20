@@ -134,6 +134,21 @@ async def handle_message(message: Message):
 # =====================================================
 # ================== RUN ===============================
 # =====================================================
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+def health_check():
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+
+    server = HTTPServer(("0.0.0.0", 8080), Handler)
+    server.serve_forever()
+
+# запускаем health server
+threading.Thread(target=health_check).start()
 
 async def main():
     print("🚀 Bot started")
