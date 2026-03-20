@@ -235,7 +235,10 @@ def chat(user_id, user_input):
     history = get_history(user_id)
 
     task = detect_task_sync(user_input)
-    enhanced = enhance_prompt_sync(user_input)
+    if task == "code":
+    enhanced = enhance_prompt(user_input)
+        else:
+        enhanced = user_input
     model = select_model(task)
 
     system_prompt = CODE_SYSTEM if task == "code" else CHAT_SYSTEM
