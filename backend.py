@@ -311,3 +311,99 @@ async def chat_async(user_id, user_input):
 
     return final
     
+# ================= AGENT LOOP =========================
+MAX_ITERATIONS = 3
+
+
+def extract_code(text):
+    """
+    Вытаскивает код из ответа модели
+    """
+    if "```" in text:
+        parts = text.split("```")
+        if len(parts) >= 2:
+            return parts[1]
+    return text
+
+
+def run_code_safely(code: str):
+    """
+    Выполнение кода с перехватом ошибок
+    """
+    local_vars = {}
+
+    try:
+        exec(code, {}, local_vars)
+        return True, "Execution success"
+    except Exception as e:
+        return False, str(e)
+
+
+def agent_fix_prompt(code, error):
+    return f"""
+You wrote this code:
+
+{code}
+
+It produced this error:
+
+{error}
+
+Fix the code.
+Return ONLY corrected code.
+"""
+
+
+def agent_generate_code(user_input):
+    return call_llm([
+        {"role": "system", "content": CODE_SYSTEM},
+        {"role": "user", "content": user_input}
+    ], CODE_MODEL)
+
+
+def agent_loop(user_input):
+    """
+    Главный агент
+    """
+
+    code = agent_generate_code(user_input)
+
+    for i in range(MAX_ITERATIONS):
+        extracted = extract_code(code)
+
+        success, result = run_code_safely(extracted)
+
+        if success:
+            return f"{extracted}\n\n# ✅ Code executed successfully"
+
+        # если ошибка — фикс
+        code = call_llm([
+            {"role": "system", "content": "You are fixing code"},
+            {"role": "user", "content": agent_fix_prompt(extracted, result)}
+        ], CODE_MODEL)
+
+    return f"{extracted}\n\n# ❌ Could not fully fix after {MAX_ITERATIONS} attempts"
+
+# ================= AGENT CHAT =========================
+def chat_with_agent(user_id, user_input):
+    """
+    Используем агент ТОЛЬКО для кодовых задач
+    """
+
+    history = get_history(user_id)
+
+    task = detect_task_sync(user_input)
+
+    if task == "code":
+        response = agent_loop(user_input)
+    else:
+        response = chat(user_id, user_input)
+
+    followup = generate_followup(response)
+
+    final = format_output(response, followup)
+
+    save_message(user_id, "user", user_input)
+    save_message(user_id, "assistant", final)
+
+    return final
