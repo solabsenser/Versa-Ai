@@ -1,14 +1,16 @@
 import os
 import json
 import time
+import asyncio
+import traceback
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Any, Optional
 
 from supabase import create_client
 from dotenv import load_dotenv
 from groq import Groq
 
-# ================= INIT =================
+# ================= INIT ===============================
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -18,61 +20,77 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY)
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ================= MODELS =================
+# ================= MODELS =============================
 CHAT_MODEL = "llama-3.1-8b-instant"
 CODE_MODEL = "llama-3.3-70b-versatile"
 
-# ================= SYSTEM PROMPTS =================
-
+# ================= SYSTEM PROMPTS =====================
 CODE_SYSTEM = """
-You are an elite software engineer.
+You are an elite senior software engineer.
 
-STRICT:
-- Only clean production code
-- No explanations unless asked
+STRICT RULES:
+- Output ONLY production-ready code
+- No useless comments
 - Fix bugs automatically
-- Optimize
+- Optimize performance
 - Use best practices
+- Use clean architecture
 - No fluff
 """
 
 CHAT_SYSTEM = """
-You are a smart assistant.
-Be clear, helpful, and proactive.
-Always suggest next actions.
+You are a smart AI assistant.
+
+- Be clear
+- Be helpful
+- Be slightly proactive
+- Suggest next steps
 """
 
 ENHANCER_STAGE_1 = """
-Rewrite user input into a structured intent.
+Rewrite user input into structured intent.
 Remove noise. Keep meaning.
 """
 
 ENHANCER_STAGE_2 = """
-Convert this into a precise developer instruction.
-Make it executable and technical.
+Convert to precise developer instruction.
+Make it technical and actionable.
 """
 
 ROUTER_PROMPT = """
-Classify task:
-Return ONLY one word:
+Classify task.
+Return ONLY:
 code OR chat
-
-Text:
 """
 
 CRITIC_PROMPT = """
-Evaluate response quality (1-10) and suggest fix if <8.
+Evaluate response quality 1-10.
+If <8 provide fix.
+
 Return JSON:
-{ "score": number, "fix": "..." }
+{"score": number, "fix": "..."}
 """
 
 FOLLOWUP_PROMPT = """
-Suggest 2 next actions user may want.
+Suggest 2 short next steps.
 """
 
-# ================= LLM CORE =================
-def call_llm(messages, model, temperature=0.3, retries=2):
-    for _ in range(retries):
+# ================= UTILS ==============================
+def now():
+    return str(datetime.utcnow())
+
+def safe_json(text):
+    try:
+        return json.loads(text)
+    except:
+        return {"score": 10}
+
+def log_error(e):
+    print("ERROR:", str(e))
+    
+# ================= LLM CORE ===========================
+def call_llm(messages, model, temperature=0.3, retries=3):
+    for attempt in range(retries):
         try:
             res = client.chat.completions.create(
                 model=model,
@@ -81,63 +99,65 @@ def call_llm(messages, model, temperature=0.3, retries=2):
                 max_tokens=4096
             )
             return res.choices[0].message.content
-        except Exception:
+        except Exception as e:
+            log_error(e)
             time.sleep(1)
-    return "Error: LLM failed"
+    return "LLM_ERROR"
 
+#================= ASYNC WRAPPER =====================
+async def call_llm_async(messages, model, temperature=0.3):
+    return await asyncio.to_thread(call_llm, messages, model, temperature)
 
-# ================= PROMPT ENHANCER =================
-def enhance_prompt(user_input):
+#================= PROMPT ENHANCER ====================
+def enhance_prompt_sync(user_input):
     step1 = call_llm([
         {"role": "system", "content": ENHANCER_STAGE_1},
         {"role": "user", "content": user_input}
-    ], CHAT_MODEL)
+    ], CHAT_MODEL, 0)
 
     step2 = call_llm([
         {"role": "system", "content": ENHANCER_STAGE_2},
         {"role": "user", "content": step1}
-    ], CHAT_MODEL)
+    ], CHAT_MODEL, 0)
 
     return step2
 
+async def enhance_prompt(user_input):
+    return await asyncio.to_thread(enhance_prompt_sync, user_input)
 
-# ================= ROUTER =================
-def detect_task(user_input):
+# ================= ROUTER =============================
+def detect_task_sync(user_input):
     try:
-        result = call_llm([
+        res = call_llm([
             {"role": "system", "content": ROUTER_PROMPT},
             {"role": "user", "content": user_input}
         ], CHAT_MODEL, 0)
 
-        if "code" in result.lower():
+        if "code" in res.lower():
             return "code"
     except:
         pass
 
-    keywords = ["python", "api", "bug", "error", "code"]
-    for k in keywords:
-        if k in user_input.lower():
-            return "code"
+    keywords = ["python", "code", "api", "bug", "error"]
+    return "code" if any(k in user_input.lower() for k in keywords) else "chat"
 
-    return "chat"
+async def detect_task(user_input):
+    return await asyncio.to_thread(detect_task_sync, user_input)
 
-
-# ================= MODEL SELECT =================
+# ================= MODEL SELECT =======================
 def select_model(task):
     return CODE_MODEL if task == "code" else CHAT_MODEL
 
-
-# ================= MEMORY =================
+#================= MEMORY =============================
 def save_message(user_id, role, content):
     supabase.table("messages").insert({
         "user_id": user_id,
         "role": role,
         "content": content,
-        "created_at": str(datetime.utcnow())
+        "created_at": now()
     }).execute()
 
-
-def get_history(user_id, limit=30):
+def get_history(user_id, limit=40):
     res = supabase.table("messages") \
         .select("*") \
         .eq("user_id", user_id) \
@@ -147,69 +167,75 @@ def get_history(user_id, limit=30):
 
     return [{"role": m["role"], "content": m["content"]} for m in res.data]
 
+def clear_history(user_id):
+    supabase.table("messages").delete().eq("user_id", user_id).execute()
 
-# ================= CONTEXT BUILDER =================
+# ================= CONTEXT ============================
+def trim_history(history, max_chars=12000):
+    total = 0
+    trimmed = []
+
+    for msg in reversed(history):
+        total += len(msg["content"])
+        if total > max_chars:
+            break
+        trimmed.append(msg)
+
+    return list(reversed(trimmed))
+
 def build_context(history):
-    context = []
+    return trim_history(history)
 
-    for msg in history:
-        context.append(msg)
-
-    return context
-
-
-# ================= SUMMARY =================
+# ================= SUMMARY ============================
 def summarize(user_id):
-    history = get_history(user_id, 50)
+    history = get_history(user_id, 60)
 
-    if len(history) < 15:
+    if len(history) < 20:
         return
 
     summary = call_llm([
-        {"role": "system", "content": "Summarize with technical details"},
+        {"role": "system", "content": "Summarize with technical detail"},
         {"role": "user", "content": str(history)}
     ], CHAT_MODEL)
 
-    supabase.table("messages").delete().eq("user_id", user_id).execute()
+    clear_history(user_id)
     save_message(user_id, "system", f"SUMMARY: {summary}")
 
-
-# ================= RESPONSE CRITIC =================
+# ================= RESPONSE CRITIC ====================
 def evaluate_response(response):
-    try:
-        raw = call_llm([
-            {"role": "system", "content": CRITIC_PROMPT},
-            {"role": "user", "content": response}
-        ], CHAT_MODEL)
+    raw = call_llm([
+        {"role": "system", "content": CRITIC_PROMPT},
+        {"role": "user", "content": response}
+    ], CHAT_MODEL, 0)
 
-        data = json.loads(raw)
-        return data
-    except:
-        return {"score": 10}
+    return safe_json(raw)
 
+def improve_response(response, model):
+    return call_llm([
+        {"role": "system", "content": "Improve response quality"},
+        {"role": "user", "content": response}
+    ], model)
 
-# ================= FOLLOWUP =================
+# ================= FOLLOWUP ===========================
 def generate_followup(response):
-    try:
-        return call_llm([
-            {"role": "system", "content": FOLLOWUP_PROMPT},
-            {"role": "user", "content": response}
-        ], CHAT_MODEL)
-    except:
-        return ""
+    return call_llm([
+        {"role": "system", "content": FOLLOWUP_PROMPT},
+        {"role": "user", "content": response}
+    ], CHAT_MODEL)
 
-
-# ================= CLEAN =================
+# ================= OUTPUT =============================
 def clean_output(text):
     return text.strip()
 
+def format_output(response, followup):
+    return f"{response}\n\n---\n💡 Next:\n{followup}"
 
-# ================= MAIN =================
+# ================= MAIN (SYNC) ========================
 def chat(user_id, user_input):
     history = get_history(user_id)
 
-    task = detect_task(user_input)
-    enhanced = enhance_prompt(user_input)
+    task = detect_task_sync(user_input)
+    enhanced = enhance_prompt_sync(user_input)
     model = select_model(task)
 
     system_prompt = CODE_SYSTEM if task == "code" else CHAT_SYSTEM
@@ -220,26 +246,68 @@ def chat(user_id, user_input):
         {"role": "user", "content": enhanced}
     ]
 
-    response = call_llm(messages, model)
+    response = call_llm(messages, model, 0.2)
     response = clean_output(response)
 
-    # self-critic
     eval_data = evaluate_response(response)
 
     if eval_data.get("score", 10) < 8:
-        response = call_llm([
-            {"role": "system", "content": "Improve this response"},
-            {"role": "user", "content": response}
-        ], model)
+        response = improve_response(response, model)
 
     followup = generate_followup(response)
 
-    final = f"{response}\n\n---\n💡 Next:\n{followup}"
+    final = format_output(response, followup)
 
     save_message(user_id, "user", user_input)
     save_message(user_id, "assistant", final)
 
-    if len(history) > 25:
+    if len(history) > 30:
         summarize(user_id)
 
     return final
+
+#================ MAIN (ASYNC) =======================
+async def chat_async(user_id, user_input):
+    history = await asyncio.to_thread(get_history, user_id)
+
+    # ПАРАЛЛЕЛЬНО
+    task, enhanced = await asyncio.gather(
+        detect_task(user_input),
+        enhance_prompt(user_input)
+    )
+
+    model = select_model(task)
+    system_prompt = CODE_SYSTEM if task == "code" else CHAT_SYSTEM
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        *build_context(history),
+        {"role": "user", "content": enhanced}
+    ]
+
+    response = await call_llm_async(messages, model, 0.2)
+    response = clean_output(response)
+
+    eval_data = await asyncio.to_thread(evaluate_response, response)
+
+    if eval_data.get("score", 10) < 8:
+        response = await call_llm_async([
+            {"role": "system", "content": "Improve response"},
+            {"role": "user", "content": response}
+        ], model)
+
+    followup = await call_llm_async([
+        {"role": "system", "content": FOLLOWUP_PROMPT},
+        {"role": "user", "content": response}
+    ], CHAT_MODEL)
+
+    final = format_output(response, followup)
+
+    await asyncio.to_thread(save_message, user_id, "user", user_input)
+    await asyncio.to_thread(save_message, user_id, "assistant", final)
+
+    if len(history) > 30:
+        await asyncio.to_thread(summarize, user_id)
+
+    return final
+    
