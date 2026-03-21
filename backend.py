@@ -98,18 +98,28 @@ Return ONLY final version.
 
 User input:
 """
-ROUTER_PROMPT = """
-Classify user intent.
+FOLLOWUP_PROMPT = """
+Generate a SHORT natural follow-up suggestion.
 
-Return ONLY:
+Rules:
+- Max 1 short sentence
+- Sound human, not robotic
+- Do NOT list features
+- Do NOT explain capabilities
+- Only suggest something relevant
 
-code → if user explicitly asks for programming, debugging, or code
-chat → everything else
+Examples:
 
-IMPORTANT:
-- Simple questions are ALWAYS chat
-- Casual messages are ALWAYS chat
-- Only clear coding requests → code
+User: привет
+→ "Хочешь что-нибудь разобрать или просто поболтать?"
+
+User: ошибка в коде
+→ "Можешь скинуть код, посмотрим что не так?"
+
+User: как сделать API
+→ "Хочешь пример на FastAPI?"
+
+If nothing useful → return empty.
 """
 FOLLOWUP_PROMPT = """
 Suggest next steps ONLY if useful.
@@ -272,7 +282,10 @@ def clean_output(text):
     return text.strip()
 
 def format_output(response, followup):
-    return f"{response}\n\n---\n💡 Next:\n{followup}"
+    if not followup or len(followup.strip()) < 5:
+        return response
+
+    return f"{response}\n\n💡 {followup}"
 
 # ================= MAIN (SYNC) ========================
 def chat(user_id, user_input):
