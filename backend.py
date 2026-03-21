@@ -10,35 +10,6 @@ from supabase import create_client
 from dotenv import load_dotenv
 from groq import Groq
 
-#=============== FILE SYSTEM ===============
-import tempfile
-
-def extract_code_block(text: str):
-    """
-    Ищет код внутри ``` ```
-    """
-    if "```" in text:
-        parts = text.split("```")
-        if len(parts) >= 2:
-            return parts[1].strip()
-    return None
-
-
-def should_send_as_file(text: str):
-    """
-    Решаем отправлять ли как файл
-    """
-    code = extract_code_block(text)
-
-    if code and len(code) > 300:
-        return True, code
-
-    # если длинный код без ``` ```
-    if len(text) > 1200 and "def " in text:
-        return True, text
-
-    return False, None
-
 # ================= INIT ===============================
 load_dotenv()
 
