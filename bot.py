@@ -13,6 +13,27 @@ from aiogram.filters import CommandStart, Command
 # ===== ИМПОРТ НАШЕГО AI =====
 from backend import chat, clear_history
 
+#==========FILE SYSTEM===========
+import tempfile
+
+def extract_code_block(text: str):
+    if "```" in text:
+        parts = text.split("```")
+        if len(parts) >= 2:
+            return parts[1].strip()
+    return None
+
+def should_send_as_file(text: str):
+    code = extract_code_block(text)
+
+    if code and len(code) > 300:
+        return True, code
+
+    if len(text) > 1200 and "def " in text:
+        return True, text
+
+    return False, None
+
 # ===== LOAD =====
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -20,10 +41,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# =====================================================
 # ================== UI ================================
-# =====================================================
-
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [
@@ -41,10 +59,7 @@ main_keyboard = ReplyKeyboardMarkup(
 # режим пользователя
 user_modes = {}
 
-# =====================================================
 # ================== START =============================
-# =====================================================
-
 @dp.message(CommandStart())
 async def start(message: Message):
     user_modes[message.from_user.id] = "chat"
@@ -57,10 +72,7 @@ async def start(message: Message):
         reply_markup=main_keyboard
     )
 
-# =====================================================
 # ================== HELP ==============================
-# =====================================================
-
 @dp.message(Command("help"))
 @dp.message(F.text == "⚡ Help")
 async def help_cmd(message: Message):
@@ -76,10 +88,7 @@ async def help_cmd(message: Message):
         "🧹 Clear Memory — очистка памяти"
     )
 
-# =====================================================
 # ================== MODE SWITCH =======================
-# =====================================================
-
 @dp.message(F.text == "💻 Code Mode")
 async def code_mode(message: Message):
     user_modes[message.from_user.id] = "code"
@@ -90,50 +99,51 @@ async def chat_mode(message: Message):
     user_modes[message.from_user.id] = "chat"
     await message.answer("💬 Chat Mode активирован")
 
-# =====================================================
 # ================== CLEAR =============================
-# =====================================================
-
 @dp.message(F.text == "🧹 Clear Memory")
 async def clear(message: Message):
     clear_history(str(message.from_user.id))
     await message.answer("🧹 Память очищена")
 
-# =====================================================
 # ================== MAIN CHAT =========================
-# =====================================================
-
 @dp.message()
 async def handle_message(message: Message):
     user_id = str(message.from_user.id)
     text = message.text
 
-    # индикатор печати
     await bot.send_chat_action(message.chat.id, "typing")
 
     try:
-        # режим
         mode = user_modes.get(message.from_user.id, "chat")
 
         if mode == "code":
             text = f"Write code:\n{text}"
 
-        # вызываем AI
+        # AI ответ
         response = chat(user_id, text)
 
-        # Telegram лимит
-        if len(response) > 4000:
-            for i in range(0, len(response), 4000):
-                await message.answer(response[i:i+4000])
+        # 🔥 ЛОГИКА ФАЙЛА
+        is_file, code = should_send_as_file(response)
+
+        if is_file:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".py") as f:
+                f.write(code.encode("utf-8"))
+                f.flush()
+
+                await message.answer("📎 Отправляю файл с кодом:")
+                await message.answer_document(f.name)
         else:
-            await message.answer(response)
+            if len(response) > 4000:
+                for i in range(0, len(response), 4000):
+                    await message.answer(response[i:i+4000])
+            else:
+                await message.answer(response)
 
     except Exception as e:
+        print("ERROR:", str(e))
         await message.answer("❌ Ошибка обработки запроса")
 
-# =====================================================
 # ================== RUN ===============================
-# =====================================================
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
