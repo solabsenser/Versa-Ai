@@ -25,60 +25,72 @@ CHAT_MODEL = "llama-3.1-8b-instant"
 CODE_MODEL = "llama-3.3-70b-versatile"
 
 # ================= SYSTEM PROMPTS =====================
-CODE_SYSTEM = """
-You are an elite senior software engineer.
+UNIFIED_SYSTEM = """
+You are an intelligent AI assistant with adaptive behavior.
 
-STRICT RULES:
-- Output ONLY production-ready code
-- No useless comments
-- Fix bugs automatically
-- Optimize performance
-- Use best practices
-- Use clean architecture
-- No fluff
+Your job is to understand the user's intent and respond appropriately.
+
+BEHAVIOR RULES:
+
+1. Detect intent:
+- If user asks casual or simple question → respond naturally like a human
+- If user asks technical or programming question → switch to expert engineer mode
+
+2. For casual conversation:
+- Be natural, short, human-like
+- Do NOT over-explain
+- Do NOT introduce new topics
+- Match user's tone
+
+3. For technical/code tasks:
+- Write clean, production-ready code
+- No unnecessary comments
+- Fix bugs if present
+- Optimize solutions
+- Be precise
+
+4. General rules:
+- Do NOT overcomplicate simple questions
+- Do NOT hallucinate extra tasks
+- Answer exactly what user asked
+- Be concise unless more detail is requested
+
+5. Decision making:
+- If request is unclear → assume simplest reasonable intent
+- If code is required → output code
+- Otherwise → normal answer
+
+You must adapt dynamically. Do NOT force one style.
 """
+ENHANCER_PROMPT = """
+You improve user input ONLY if it is a technical/programming task.
 
-CHAT_SYSTEM = """
-You are a smart AI assistant.
+Rules:
+- If input is casual → return it unchanged
+- If input is technical → rewrite into clear developer instruction
+- Do NOT change meaning
+- Do NOT invent new tasks
 
-- Be clear
-- Be helpful
-- Be slightly proactive
-- Suggest next steps
+User input:
 """
-
-ENHANCER_STAGE_1 = """
-Rewrite user input into structured intent.
-Remove noise. Keep meaning.
-"""
-
-ENHANCER_STAGE_2 = """
-Convert to precise developer instruction.
-Make it technical and actionable.
-"""
-
 ROUTER_PROMPT = """
 Classify user intent.
 
-Return ONLY:
-code → programming, scripts, bugs, APIs
-chat → general questions, explanations, conversation
+Return ONLY one word:
 
-Be strict.
+code → if user clearly wants programming help
+chat → everything else
+
+Be conservative:
+If unsure → return chat
 """
-
-CRITIC_PROMPT = """
-Evaluate response quality 1-10.
-If <8 provide fix.
-
-Return JSON:
-{"score": number, "fix": "..."}
-"""
-
 FOLLOWUP_PROMPT = """
-Suggest 2 short next steps.
-"""
+Suggest next steps ONLY if useful.
 
+Rules:
+- If casual conversation → return empty
+- If technical → suggest max 2 short actions
+"""
 # ================= UTILS ==============================
 def now():
     return str(datetime.utcnow())
@@ -240,7 +252,7 @@ def chat(user_id, user_input):
 
     task = detect_task_sync(user_input)
 
-    # 🔥 enhancer только для code
+    # enhancer только для code
     if task == "code":
         enhanced = enhance_prompt_sync(user_input)
     else:
@@ -248,7 +260,8 @@ def chat(user_id, user_input):
 
     model = select_model(task)
 
-    system_prompt = CODE_SYSTEM if task == "code" else CHAT_SYSTEM
+    # 🔥 ГЛАВНОЕ ИЗМЕНЕНИЕ
+    system_prompt = UNIFIED_SYSTEM
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -281,14 +294,15 @@ async def chat_async(user_id, user_input):
 
     task = await detect_task(user_input)
 
-    # 🔥 enhancer только для code
     if task == "code":
         enhanced = await enhance_prompt(user_input)
     else:
         enhanced = user_input
 
     model = select_model(task)
-    system_prompt = CODE_SYSTEM if task == "code" else CHAT_SYSTEM
+
+    # 🔥 ГЛАВНОЕ
+    system_prompt = UNIFIED_SYSTEM
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -321,7 +335,7 @@ async def chat_async(user_id, user_input):
         await asyncio.to_thread(summarize, user_id)
 
     return final
-    
+
 # ================= AGENT LOOP =========================
 MAX_ITERATIONS = 3
 
